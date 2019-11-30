@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  HelloFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: '/'
+      Policies:
+      - PolicyName: logs
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
+      - PolicyName: sqs
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - sqs:SendMessage
+            Resource: !Sub ${TaskQueue.Arn}
+  HelloFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: cf-api/main
+      Runtime: go1.x
+      Role: !Sub ${HelloFunctionRole.Arn}
+      Events:
+        GetEvent:
+          Type: Api
+          Properties:
+            Path: /
+            Method: post
+      Environment:
+          Variables:
+            TASK_QUEUE_URL: !Ref TaskQueue
+  SQSHandlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: '/'
+      Policies:
+      - PolicyName: logs
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*
+      - PolicyName: sqs
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+            - sqs:ChangeMessageVisibility
+            Resource: !Sub ${TaskQueue.Arn}
+  SQSHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: cf-worker/main
+      Runtime: go1.x
+      Role: !Sub ${SQSHandlerRole.Arn}
+      Environment:
+          Variables:
+            TASK_QUEUE_URL: !Ref TaskQueue
+  LambdaFunctionEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 1
+      Enabled: true
+      EventSourceArn: !GetAtt TaskQueue.Arn
+      FunctionName: !GetAtt SQSHandlerFunction.Arn
+  TaskQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 60
+      RedrivePolicy:
+        deadLetterTargetArn: !Sub ${DeadLetterQueue.Arn}
+        maxReceiveCount: 10
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue

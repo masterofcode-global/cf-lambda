@@ -1,0 +1,78 @@
+version: 0.2
+
+env:
+  variables:
+    # This S3 bucket will be used to store the packaged Lambda deployment bundle.
+    # Make sure to provide a valid S3 bucket name (it must exist already).
+    # The AWS CodeBuild IAM role must allow write access to it.
+    S3_BUCKET: "cf-lambda-deployment-26112019"
+    API_PACKAGE: "cf-api"
+    WORKER_PACKAGE: "cf-worker"
+
+phases:
+
+  install:
+    runtime-versions:
+      golang: 1.13
+    commands:
+
+      # AWS Codebuild Go images use /go for the $GOPATH so let's copy our
+      # application source code into that directory structure.
+      #- mkdir -p "/go/src/${API_PACKAGE}"
+      - ln -s "${CODEBUILD_SRC_DIR}/${API_PACKAGE}" "/go/src"
+      - ls "/go/src/${API_PACKAGE}"
+      #- mkdir -p "/go/src/${WORKER_PACKAGE}"
+      - ln -s "${CODEBUILD_SRC_DIR}/${WORKER_PACKAGE}" "/go/src"
+      # Print all environment variables (handy for AWS CodeBuild logs)
+      - env
+
+      # Install golint
+      - go get -u golang.org/x/lint/golint
+
+  pre_build:
+    commands:
+
+      # Make sure we're in the project directory within our GOPATH
+      - cd "/go/src/${API_PACKAGE}"
+
+      # Fetch all dependencies
+      - go get -t ./...
+
+      # Ensure code passes all lint tests
+      - golint -set_exit_status
+
+      # Check the Go code for common problems with 'go vet'
+      - go vet .
+
+      # Run all tests included with our application
+      - go test .
+
+      - cd "/go/src/${WORKER_PACKAGE}"
+
+      # Fetch all dependencies
+      - go get -t ./...
+
+      # Ensure code passes all lint tests
+      - golint -set_exit_status
+
+      # Check the Go code for common problems with 'go vet'
+      - go vet .
+
+      # Run all tests included with our application
+      - go test .
+
+  build:
+    commands:
+
+      # Build our go application
+      - cd "/go/src/${API_PACKAGE}"
+      - go build -o main
+      - cd "/go/src/${WORKER_PACKAGE}"
+      - go build -o main
+      - cd "${CODEBUILD_SRC_DIR}"
+      # Package our application with AWS SAM
+      - aws cloudformation package --template-file template.yml --s3-bucket ${S3_BUCKET} --output-template-file outputtemplate.yml
+
+artifacts:
+  files:
+    - outputtemplate.yml
